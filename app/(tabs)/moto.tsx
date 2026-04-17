@@ -175,6 +175,16 @@ function GeralTab() {
     }).filter((a) => a.needsChange);
   }, [forecasts, dailyKms, maintenance, config.currentMotoKm]);
 
+  // Totais globais (todos os dados, sem filtro de período) para os cards de resumo
+  const totalEarningsAll = earnings.reduce((s, e) => s + e.value, 0);
+  const totalKmAll = dailyKms.reduce((s, e) => s + e.km, 0);
+  const totalKmCostAll = totalKmAll * config.costPerKm;
+  const liquidoAll = Math.max(0, totalEarningsAll - totalKmCostAll);
+  const totalMaintenanceAll = maintenance.reduce((s, m) => s + m.value, 0);
+  const totalMinutesAll = workShifts.reduce((s, sh) => s + sh.durationMinutes, 0);
+  const totalHoursAll = totalMinutesAll / 60;
+  const diasTrabalhados = new Set(earnings.map((e) => e.date)).size;
+
   return (
     <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
       <View className="px-5 pt-2">
@@ -205,6 +215,32 @@ function GeralTab() {
           </View>
         ))}
 
+        {/* Cards de resumo global — sempre exibidos no topo */}
+        <View className="flex-row gap-3 mb-3">
+          <StatCard title="Total Apps" value={formatCurrency(totalEarningsAll)}
+            icon={<IconSymbol name="chart.line.uptrend.xyaxis" size={16} color={colors.success} />} />
+          <StatCard title="Valor Líquido" value={formatCurrency(liquidoAll)}
+            icon={<IconSymbol name="dollarsign.circle.fill" size={16} color={colors.success} />} />
+        </View>
+        <View className="flex-row gap-3 mb-3">
+          <StatCard title="Horas Trabalhadas" value={`${totalHoursAll.toFixed(1)}h`}
+            icon={<IconSymbol name="clock.fill" size={16} color={colors.primary} />} />
+          <StatCard title="Custo Total KM" value={formatCurrency(totalKmCostAll)}
+            icon={<IconSymbol name="speedometer" size={16} color={colors.warning} />} />
+        </View>
+        <View className="flex-row gap-3 mb-3">
+          <StatCard title="Gasto Manutenção" value={formatCurrency(totalMaintenanceAll)}
+            icon={<IconSymbol name="wrench.fill" size={16} color={colors.error} />} />
+          <StatCard title="Total KM" value={`${formatOdometer(totalKmAll)} km`}
+            icon={<IconSymbol name="location.fill" size={16} color={colors.muted} />} />
+        </View>
+        <View className="flex-row gap-3 mb-4">
+          <StatCard title="Dias Trabalhados" value={diasTrabalhados.toString()}
+            icon={<IconSymbol name="calendar" size={16} color={colors.primary} />} />
+          <View className="flex-1" />
+        </View>
+
+        {/* Filtro de período */}
         <View className="flex-row flex-wrap gap-2 mb-3">
           {(["daily", "weekly", "monthly", "custom"] as CostPeriod[]).map((p) => (
             <TouchableOpacity key={p} onPress={() => { setPeriod(p); setRefDate(new Date()); }}
@@ -241,20 +277,7 @@ function GeralTab() {
           </View>
         )}
 
-        <View className="flex-row gap-3 mb-3">
-          <StatCard title="Faturamento" value={formatCurrency(data.totalEarnings)}
-            icon={<IconSymbol name="chart.line.uptrend.xyaxis" size={16} color={colors.success} />} />
-          <StatCard title="Lucro Líquido" value={formatCurrency(data.netProfit)}
-            icon={<IconSymbol name="dollarsign.circle.fill" size={16} color={data.netProfit >= 0 ? colors.success : colors.error} />} />
-        </View>
-
-        <View className="flex-row gap-3 mb-4">
-          <StatCard title="KM Rodado" value={`${formatOdometer(data.totalKm)} km`}
-            icon={<IconSymbol name="speedometer" size={16} color={colors.muted} />} />
-          <StatCard title="R$/Hora" value={formatCurrency(reaisPerHora)}
-            icon={<IconSymbol name="clock.fill" size={16} color={colors.primary} />} />
-        </View>
-
+        {/* Gráfico de distribuição de custos — agora por último */}
         <Card title="Distribuição de Custos" className="mb-4">
           <SimpleBarChart
             labels={chartLabels}
@@ -264,32 +287,6 @@ function GeralTab() {
             showValues
           />
         </Card>
-
-        <View className="flex-row gap-3 mb-3">
-          <StatCard
-            title="Ganhos Brutos"
-            value={formatCurrency(data.totalEarnings)}
-            icon={<IconSymbol name="chart.line.uptrend.xyaxis" size={16} color={colors.success} />}
-          />
-          <StatCard
-            title="Custo KM"
-            value={`-${formatCurrency(data.kmCost)}`}
-            icon={<IconSymbol name="speedometer" size={16} color={colors.warning} />}
-          />
-        </View>
-
-        <View className="flex-row gap-3 mb-4">
-          <StatCard
-            title="Manutenção"
-            value={`-${formatCurrency(data.maintenanceCost)}`}
-            icon={<IconSymbol name="wrench.fill" size={16} color={colors.error} />}
-          />
-          <StatCard
-            title="Lucro Líquido"
-            value={formatCurrency(data.netProfit)}
-            icon={<IconSymbol name="dollarsign.circle.fill" size={16} color={data.netProfit >= 0 ? colors.success : colors.error} />}
-          />
-        </View>
       </View>
     </ScrollView>
   );
@@ -613,6 +610,7 @@ function KmTab() {
   const [date, setDate] = useState(todayFormatted());
   const [refDate, setRefDate] = useState(new Date());
   const [inputMode, setInputMode] = useState<"km" | "odometro">("km");
+  const [kmType, setKmType] = useState<"trabalho" | "pessoal">("trabalho");
   const currentOdometer = config.currentMotoKm || 0;
 
   useEffect(() => {
@@ -671,20 +669,31 @@ function KmTab() {
         else Alert.alert("Atenção", `O odômetro atual (${formatOdometer(parsedKm)}) deve ser maior que o último registro (${formatOdometer(lastOdometer)}).`);
         return;
       }
-
       const distancia = lastOdometer > 0 ? parsedKm - lastOdometer : parsedKm;
-      await addDailyKm({ km: distancia, date: parseDateInput(date) });
+      if (kmType === "trabalho") {
+        await addDailyKm({ km: distancia, date: parseDateInput(date) });
+      }
       await saveConfig({ currentMotoKm: parsedKm });
-
-      if (Platform.OS === "web") alert(`KM registrado: ${formatOdometer(distancia)} km (odômetro atualizado para ${formatOdometer(parsedKm)})`);
-      else Alert.alert("Sucesso", `KM registrado: ${formatOdometer(distancia)} km\nOdômetro atualizado para ${formatOdometer(parsedKm)}`);
+      if (kmType === "trabalho") {
+        if (Platform.OS === "web") alert(`KM de trabalho registrado: ${formatOdometer(distancia)} km (odômetro: ${formatOdometer(parsedKm)})`);
+        else Alert.alert("Sucesso", `KM de trabalho registrado: ${formatOdometer(distancia)} km\nOdômetro: ${formatOdometer(parsedKm)}`);
+      } else {
+        if (Platform.OS === "web") alert(`Odômetro atualizado para ${formatOdometer(parsedKm)} km (KM pessoal não contabilizado como custo)`);
+        else Alert.alert("Sucesso", `Odômetro atualizado para ${formatOdometer(parsedKm)} km\nKM pessoal não contabilizado como custo.`);
+      }
     } else {
-      await addDailyKm({ km: parsedKm, date: parseDateInput(date) });
+      if (kmType === "trabalho") {
+        await addDailyKm({ km: parsedKm, date: parseDateInput(date) });
+      }
       const updatedOdometer = currentOdometer + parsedKm;
       await saveConfig({ currentMotoKm: updatedOdometer });
-
-      if (Platform.OS === "web") alert(`KM registrado: ${formatOdometer(parsedKm)} km (odômetro atualizado para ${formatOdometer(updatedOdometer)})`);
-      else Alert.alert("Sucesso", `KM registrado: ${formatOdometer(parsedKm)} km\nOdômetro atualizado para ${formatOdometer(updatedOdometer)}`);
+      if (kmType === "trabalho") {
+        if (Platform.OS === "web") alert(`KM de trabalho registrado: ${formatOdometer(parsedKm)} km (odômetro: ${formatOdometer(updatedOdometer)})`);
+        else Alert.alert("Sucesso", `KM de trabalho: ${formatOdometer(parsedKm)} km\nOdômetro: ${formatOdometer(updatedOdometer)}`);
+      } else {
+        if (Platform.OS === "web") alert(`Odômetro atualizado: +${formatOdometer(parsedKm)} km (KM pessoal, não contabilizado como custo)`);
+        else Alert.alert("Sucesso", `Odômetro atualizado: +${formatOdometer(parsedKm)} km\nKM pessoal não contabilizado como custo.`);
+      }
     }
 
     setKm(inputMode === "odometro" ? formatOdometer(inputMode === "odometro" ? parsedKm : currentOdometer) : "");
@@ -792,6 +801,27 @@ function KmTab() {
           ))}
         </View>
 
+        {/* Seletor Trabalho / Pessoal */}
+        <View className="flex-row gap-2 mb-3">
+          {(["trabalho", "pessoal"] as const).map((tipo) => (
+            <TouchableOpacity key={tipo} onPress={() => setKmType(tipo)}
+              style={{
+                flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: "center",
+                backgroundColor: kmType === tipo ? (tipo === "trabalho" ? colors.success : colors.warning) : colors.surface,
+                borderWidth: 1, borderColor: kmType === tipo ? (tipo === "trabalho" ? colors.success : colors.warning) : colors.border,
+              }}>
+              <Text style={{ color: kmType === tipo ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 12 }}>
+                {tipo === "trabalho" ? "🏍 Trabalho" : "🏠 Pessoal"}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {kmType === "pessoal" && (
+          <View className="bg-surface border border-border rounded-xl p-3 mb-3">
+            <Text className="text-xs text-muted">KM pessoal apenas atualiza o odômetro. Não é lançado como custo de trabalho.</Text>
+          </View>
+        )}
+
         {inputMode === "odometro" && currentOdometer > 0 && (
           <View className="bg-surface border border-border rounded-xl p-3 mb-3">
             <Text className="text-xs text-muted">Último odômetro registrado: <Text className="font-bold text-foreground">{formatOdometer(currentOdometer)} km</Text></Text>
@@ -814,8 +844,10 @@ function KmTab() {
           </View>
         </View>
         <TouchableOpacity onPress={handleSave}
-          style={{ backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: "center" }}>
-          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>{inputMode === "km" ? "Salvar KM" : "Registrar Odômetro"}</Text>
+          style={{ backgroundColor: kmType === "trabalho" ? colors.primary : colors.warning, borderRadius: 14, paddingVertical: 14, alignItems: "center" }}>
+          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>
+            {inputMode === "km" ? (kmType === "trabalho" ? "Salvar KM Trabalho" : "Salvar KM Pessoal") : (kmType === "trabalho" ? "Registrar Odômetro (Trabalho)" : "Registrar Odômetro (Pessoal)")}
+          </Text>
         </TouchableOpacity>
 
         <Text className="text-sm font-semibold text-muted mt-5 mb-2 uppercase">Histórico da Semana</Text>
@@ -1234,6 +1266,7 @@ function ManutencaoTab() {
     <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
       <View className="px-5 pt-2">
         <Text className="text-lg font-bold text-foreground mb-3">Manutenção</Text>
+
         <View className="flex-row gap-2 mb-3">
           {(["month", "year"] as const).map((m) => (
             <TouchableOpacity key={m} onPress={() => setViewMode(m)}
@@ -1254,8 +1287,12 @@ function ManutencaoTab() {
             <DateNavigator label={`${year}`}
               onPrev={() => setRefDate(new Date(year - 1, refDate.getMonth()))}
               onNext={() => setRefDate(new Date(year + 1, refDate.getMonth()))} />
-            <StatCard title="Total Anual" value={formatCurrency(totalAnual)} />
-            <Card title="Gastos com Manutenção por Mês" className="mt-3 mb-4">
+            <View className="flex-row gap-3 mb-3">
+              <StatCard title="Total Anual" value={formatCurrency(totalAnual)}
+                icon={<IconSymbol name="chart.bar.fill" size={16} color={colors.error} />} />
+              <View className="flex-1" />
+            </View>
+            <Card title="Gastos com Manutenção por Mês" className="mb-4">
               <SimpleBarChart
                 labels={monthNames}
                 data={annualData}
@@ -1271,9 +1308,13 @@ function ManutencaoTab() {
             <DateNavigator label={formatMonthRange(refDate)}
               onPrev={() => setRefDate(shiftMonth(refDate, -1))}
               onNext={() => setRefDate(shiftMonth(refDate, 1))} />
-            <StatCard title="Total do Mês" value={formatCurrency(monthMaint.reduce((s, m) => s + m.value, 0))} />
+            <View className="flex-row gap-3 mb-3">
+              <StatCard title="Total do Mês" value={formatCurrency(monthMaint.reduce((s, m) => s + m.value, 0))}
+                icon={<IconSymbol name="wrench.fill" size={16} color={colors.error} />} />
+              <View className="flex-1" />
+            </View>
             {Object.keys(byItem).length > 0 && (
-              <Card title="Por Item" className="mt-3 mb-4">
+              <Card title="Por Item" className="mb-4">
                 <SimpleBarChart
                   labels={Object.keys(byItem)}
                   data={Object.values(byItem)}
@@ -1285,92 +1326,93 @@ function ManutencaoTab() {
           </>
         )}
 
-        <Text className="text-base font-bold text-foreground mt-2 mb-3">Novo Registro</Text>
-        <Text className="text-xs text-muted mb-1 uppercase">Item</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-          {maintenanceCats.map((mi: string) => (
-            <TouchableOpacity key={mi} onPress={() => setItem(mi)}
-              style={{
-                paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginRight: 8,
-                backgroundColor: item === mi ? colors.primary : colors.surface,
-                borderWidth: 1, borderColor: item === mi ? colors.primary : colors.border,
-              }}>
-              <Text style={{ color: item === mi ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>{mi}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-        <View className="flex-row gap-3 mb-3">
-          <View className="flex-1">
-            <View className="flex-row items-center justify-between mb-1">
-              <Text className="text-xs text-muted uppercase">KM Atual</Text>
-              {(config.currentMotoKm || 0) > 0 && (
-                <TouchableOpacity onPress={() => setKmVal(String(config.currentMotoKm))}
-                  style={{ backgroundColor: colors.primary + "22", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
-                  <Text style={{ color: colors.primary, fontSize: 10, fontWeight: "700" }}>📍 {formatOdometer(config.currentMotoKm || 0)}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
-              placeholder="0" placeholderTextColor={colors.muted} keyboardType="decimal-pad"
-              value={kmVal} onChangeText={setKmVal} returnKeyType="done" />
-          </View>
-          <View className="flex-1">
-            <Text className="text-xs text-muted mb-1 uppercase">Valor (R$)</Text>
-            <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
-              placeholder="0,00" placeholderTextColor={colors.muted} keyboardType="decimal-pad"
-              value={value} onChangeText={setValue} returnKeyType="done" />
-          </View>
-        </View>
-
-        {workshops.length > 0 && (
-          <>
-            <Text className="text-xs text-muted mb-1 uppercase">Oficina/Posto</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
-              <TouchableOpacity onPress={() => setSelectedWorkshop("")}
+        <Card title="Novo Registro" className="mb-4">
+          <Text className="text-xs text-muted mb-1 uppercase">Item</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            {maintenanceCats.map((mi: string) => (
+              <TouchableOpacity key={mi} onPress={() => setItem(mi)}
                 style={{
                   paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginRight: 8,
-                  backgroundColor: selectedWorkshop === "" ? colors.primary : colors.surface,
-                  borderWidth: 1, borderColor: selectedWorkshop === "" ? colors.primary : colors.border,
+                  backgroundColor: item === mi ? colors.primary : colors.surface,
+                  borderWidth: 1, borderColor: item === mi ? colors.primary : colors.border,
                 }}>
-                <Text style={{ color: selectedWorkshop === "" ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>Outro</Text>
+                <Text style={{ color: item === mi ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>{mi}</Text>
               </TouchableOpacity>
-              {workshops.map((ws) => (
-                <TouchableOpacity key={ws.id} onPress={() => { setSelectedWorkshop(ws.name); setLocation(ws.name); }}
+            ))}
+          </ScrollView>
+
+          <View className="flex-row gap-3 mb-3">
+            <View className="flex-1">
+              <View className="flex-row items-center justify-between mb-1">
+                <Text className="text-xs text-muted uppercase">KM Atual</Text>
+                {(config.currentMotoKm || 0) > 0 && (
+                  <TouchableOpacity onPress={() => setKmVal(String(config.currentMotoKm))}
+                    style={{ backgroundColor: colors.primary + "22", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+                    <Text style={{ color: colors.primary, fontSize: 10, fontWeight: "700" }}>📍 {formatOdometer(config.currentMotoKm || 0)}</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
+                placeholder="0" placeholderTextColor={colors.muted} keyboardType="decimal-pad"
+                value={kmVal} onChangeText={setKmVal} returnKeyType="done" />
+            </View>
+            <View className="flex-1">
+              <Text className="text-xs text-muted mb-1 uppercase">Valor (R$)</Text>
+              <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
+                placeholder="0,00" placeholderTextColor={colors.muted} keyboardType="decimal-pad"
+                value={value} onChangeText={setValue} returnKeyType="done" />
+            </View>
+          </View>
+
+          {workshops.length > 0 && (
+            <>
+              <Text className="text-xs text-muted mb-1 uppercase">Oficina/Posto</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                <TouchableOpacity onPress={() => setSelectedWorkshop("")}
                   style={{
                     paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginRight: 8,
-                    backgroundColor: selectedWorkshop === ws.name ? colors.primary : colors.surface,
-                    borderWidth: 1, borderColor: selectedWorkshop === ws.name ? colors.primary : colors.border,
+                    backgroundColor: selectedWorkshop === "" ? colors.primary : colors.surface,
+                    borderWidth: 1, borderColor: selectedWorkshop === "" ? colors.primary : colors.border,
                   }}>
-                  <Text style={{ color: selectedWorkshop === ws.name ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>{ws.name}</Text>
+                  <Text style={{ color: selectedWorkshop === "" ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>Outro</Text>
                 </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </>
-        )}
+                {workshops.map((ws: any) => (
+                  <TouchableOpacity key={ws.id} onPress={() => { setSelectedWorkshop(ws.name); setLocation(ws.name); }}
+                    style={{
+                      paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginRight: 8,
+                      backgroundColor: selectedWorkshop === ws.name ? colors.primary : colors.surface,
+                      borderWidth: 1, borderColor: selectedWorkshop === ws.name ? colors.primary : colors.border,
+                    }}>
+                    <Text style={{ color: selectedWorkshop === ws.name ? "#fff" : colors.foreground, fontWeight: "600", fontSize: 11 }}>{ws.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </>
+          )}
 
-        <View className="flex-row gap-3 mb-3">
-          <View className="flex-1">
-            <Text className="text-xs text-muted mb-1 uppercase">Local</Text>
-            <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
-              placeholder="Oficina" placeholderTextColor={colors.muted}
-              value={selectedWorkshop || location}
-              onChangeText={(t) => { setLocation(t); setSelectedWorkshop(""); }} returnKeyType="done" />
+          <View className="flex-row gap-3 mb-4">
+            <View className="flex-1">
+              <Text className="text-xs text-muted mb-1 uppercase">Local</Text>
+              <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
+                placeholder="Oficina" placeholderTextColor={colors.muted}
+                value={selectedWorkshop || location}
+                onChangeText={(t) => { setLocation(t); setSelectedWorkshop(""); }} returnKeyType="done" />
+            </View>
+            <View className="flex-1">
+              <Text className="text-xs text-muted mb-1 uppercase">Data</Text>
+              <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
+                placeholder="DD/MM/AA" placeholderTextColor={colors.muted}
+                value={date} onChangeText={setDate} returnKeyType="done" />
+            </View>
           </View>
-          <View className="flex-1">
-            <Text className="text-xs text-muted mb-1 uppercase">Data</Text>
-            <TextInput className="bg-surface border border-border rounded-xl px-4 py-3 text-foreground"
-              placeholder="DD/MM/AA" placeholderTextColor={colors.muted}
-              value={date} onChangeText={setDate} returnKeyType="done" />
-          </View>
-        </View>
 
-        <TouchableOpacity onPress={handleSave}
-          style={{ backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: "center" }}>
-          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Salvar Manutenção</Text>
-        </TouchableOpacity>
+          <TouchableOpacity onPress={handleSave}
+            style={{ backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: "center" }}>
+            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Salvar Manutenção</Text>
+          </TouchableOpacity>
+        </Card>
 
-        <Text className="text-sm font-semibold text-muted mt-5 mb-2 uppercase">Últimos Registros</Text>
+        <Text className="text-sm font-semibold text-muted mb-2 uppercase">Últimos Registros</Text>
         {sorted.map((m) => (
           <View key={m.id} className="flex-row items-center bg-surface border border-border rounded-xl p-3 mb-2">
             <View className="flex-1">
@@ -1383,6 +1425,7 @@ function ManutencaoTab() {
             </TouchableOpacity>
           </View>
         ))}
+        {sorted.length === 0 && <Text className="text-sm text-muted text-center py-4">Nenhum registro encontrado</Text>}
       </View>
     </ScrollView>
   );
@@ -1487,7 +1530,6 @@ function PrevisaoTab() {
   }, []);
 
   const items = forecasts
-    .filter((f) => f.item.toLowerCase() !== "combustível" && f.item.toLowerCase() !== "combustivel")
     .map((f) => ({ name: f.item, unitCost: f.unitCost, kmDuration: f.kmDuration }));
   const result = calcFullForecast(
     parseFloat(dailyGoal.replace(",", ".")) || 0,
@@ -1601,9 +1643,13 @@ function PrevisaoTab() {
               <Text className="text-sm font-bold" style={{ color: colors.error }}>{formatCurrency(Math.ceil(item.changesPerYear) * item.unitCost)}</Text>
             </View>
           ))}
-          <View className="flex-row justify-between items-center py-3 mt-1">
+          <View className="flex-row justify-between items-center py-3 border-b border-border/50 mt-1">
             <Text className="text-sm font-bold text-foreground">Total Gasto Manutenção/Ano</Text>
             <Text className="text-base font-bold" style={{ color: colors.error }}>{formatCurrency(result.totalAnnualCost)}</Text>
+          </View>
+          <View className="flex-row justify-between items-center py-3 mt-1">
+            <Text className="text-sm font-bold text-foreground">Custo Real/KM</Text>
+            <Text className="text-base font-bold" style={{ color: colors.muted }}>{formatCurrency(result.realCostPerKm)}</Text>
           </View>
         </Card>
 
@@ -1630,6 +1676,22 @@ function PrevisaoTab() {
             style={{ backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12, alignItems: "center" }}>
             <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>Adicionar Item</Text>
           </TouchableOpacity>
+        </Card>
+
+        <Card title="Notificações de Manutenção" className="mb-4">
+          <Text className="text-xs text-muted mb-3">Ative ou desative os alertas de troca para cada item.</Text>
+          {forecasts.map((f) => (
+            <View key={f.id} className="flex-row items-center justify-between py-2 border-b border-border/50">
+              <Text className="text-sm text-foreground flex-1">{f.item}</Text>
+              <Switch
+                value={f.notificationEnabled !== false}
+                onValueChange={(val) => updateForecast(f.id, { notificationEnabled: val })}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
+          ))}
+          {forecasts.length === 0 && <Text className="text-xs text-muted">Nenhum item cadastrado.</Text>}
         </Card>
       </View>
     </ScrollView>
@@ -1743,10 +1805,10 @@ function ConfigTab() {
         if (!file) return;
         try {
           const text = await file.text();
-          const parsed = JSON.parse(text);
-          const jsonStr = typeof parsed === "object" ? JSON.stringify(parsed) : text;
-          const success = await importData(jsonStr);
-          if (success) { alert("Dados importados com sucesso!"); } else { alert("Erro: arquivo inválido."); }
+          // Valida se é JSON antes de passar para importData
+          JSON.parse(text);
+          const success = await importData(text);
+          if (success) { alert("Dados importados com sucesso!"); } else { alert("Erro: arquivo inválido ou formato não reconhecido."); }
         } catch (parseErr) {
           alert("Erro: o arquivo não contém JSON válido.");
         }
@@ -1762,7 +1824,10 @@ function ConfigTab() {
         if (result.canceled || !result.assets || result.assets.length === 0) return;
         const fileUri = result.assets[0].uri;
         const FileSystem = require("expo-file-system");
-        const content = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.UTF8 });
+        let content = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.UTF8 });
+        // Remove BOM se presente
+        if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1);
+        content = content.trim();
         try {
           JSON.parse(content);
         } catch {
@@ -1771,9 +1836,9 @@ function ConfigTab() {
         }
         const success = await importData(content);
         if (success) Alert.alert("Sucesso", "Dados importados com sucesso!");
-        else Alert.alert("Erro", "Arquivo inválido.");
+        else Alert.alert("Erro", "Arquivo inválido ou formato não reconhecido.");
       } catch (err) {
-        Alert.alert("Erro", "Falha ao importar dados.");
+        Alert.alert("Erro", "Falha ao importar dados. Certifique-se de que o arquivo foi gerado pelo MotoControle.");
       }
     }
   };
@@ -1927,20 +1992,37 @@ function ConfigTab() {
         </Card>
 
         <Card title="Aplicativos" className="mb-4">
-          <Text className="text-xs text-muted mb-3">Gerencie os aplicativos de entrega.</Text>
-          {config.apps.map((app: string) => (
-            <View key={app} className="flex-row items-center justify-between py-2 border-b border-border/50">
-              <View className="flex-row items-center">
-                <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: config.appColors?.[app] || getAppColor(app), marginRight: 8 }} />
-                <Text className="text-sm text-foreground">{app}</Text>
+          <Text className="text-xs text-muted mb-3">Gerencie os aplicativos de entrega e suas cores.</Text>
+          {config.apps.map((app: string) => {
+            const currentColor = config.appColors?.[app] || getAppColor(app);
+            const palette = ["#EF4444","#F97316","#EAB308","#22C55E","#14B8A6","#3B82F6","#8B5CF6","#EC4899","#F43F5E","#6366F1","#10B981","#0EA5E9"];
+            return (
+              <View key={app} className="mb-3 pb-3 border-b border-border/50">
+                <View className="flex-row items-center justify-between mb-2">
+                  <View className="flex-row items-center">
+                    <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: currentColor, marginRight: 8 }} />
+                    <Text className="text-sm font-semibold text-foreground">{app}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleRemoveApp(app)} style={{ padding: 4 }}>
+                    <IconSymbol name="trash.fill" size={16} color={colors.error} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {palette.map((cor) => (
+                    <TouchableOpacity key={cor} onPress={() => handleSetAppColor(app, cor)}
+                      style={{
+                        width: 28, height: 28, borderRadius: 14, backgroundColor: cor, marginRight: 8,
+                        borderWidth: currentColor === cor ? 3 : 1,
+                        borderColor: currentColor === cor ? "#fff" : "transparent",
+                        shadowColor: currentColor === cor ? cor : "transparent",
+                        shadowOpacity: currentColor === cor ? 0.8 : 0,
+                        shadowRadius: 4,
+                      }} />
+                  ))}
+                </ScrollView>
               </View>
-              <View className="flex-row gap-2">
-                <TouchableOpacity onPress={() => handleRemoveApp(app)} style={{ padding: 4 }}>
-                  <IconSymbol name="trash.fill" size={16} color={colors.error} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
+            );
+          })}
           <View className="flex-row gap-2 mt-3">
             <TextInput className="flex-1 bg-background border border-border rounded-xl px-3 py-2 text-foreground"
               placeholder="Novo App" placeholderTextColor={colors.muted}
